@@ -8,8 +8,8 @@ import logging
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("presence_app")
 
-# Configuration - adapt via environment if needed
-ORIGINAL_APP = os.environ.get('ORIGINAL_APP', 'http://localhost:5000')  # original infinitedraft app
+# Configuration
+ORIGINAL_APP = os.environ.get('ORIGINAL_APP', 'http://localhost:5000')
 PRESENCE_PORT = int(os.environ.get('PRESENCE_PORT', 5001))
 
 app = Flask(__name__)
@@ -19,8 +19,7 @@ socketio = SocketIO(app, cors_allowed_origins="*")
 connected_sids = []
 sid_to_name = {}
 
-# Host welcome page HTML (served at /). It connects to this presence server via socket.io
-# There is no players dropdown — the host will use the current connected count as players.
+# Host welcome page HTML (served at /)
 START_HTML = """
 <!doctype html>
 <html>
@@ -52,14 +51,11 @@ START_HTML = """
 
     <script src="https://cdn.socket.io/4.5.3/socket.io.min.js"></script>
     <script>
-      // Connect as admin so this host page doesn't increment the connected-user count
       const socket = io(window.location.origin + '?source=admin', { transports: ['websocket', 'polling'] });
       socket.on('connect', () => console.log('socket connected to presence server (admin)'));
       socket.on('user_count', n => document.getElementById('count').textContent = n);
-      socket.on('go', data => {
-        // Admin may also receive go; it's informational for the host window
-        console.log('Go event received (host page)', data);
-      });
+      socket.on('go', data => { console.log('Go event received (host page)', data); });
+      socket.on('packs_update', data => { console.log('packs_update', data); });
 
       async function fetchSets() {
         try {
@@ -98,7 +94,6 @@ START_HTML = """
         }
       });
 
-      // init
       fetchSets();
     </script>
   </body>
@@ -109,39 +104,35 @@ START_HTML = """
 def index():
     return render_template_string(START_HTML)
 
+
 @app.route('/sets')
 def forward_sets():
     try:
         r = requests.get(f"{ORIGINAL_APP}/get_sets", timeout=5)
         if r.status_code == 200:
             return jsonify(r.json())
-        log.warning("Original app /get_sets returned status %s", r.status_code)
+        log.warning("Original app /get_sets returned status %s: %s", r.status_code, r.text)
         return jsonify({'sets': []})
     except Exception as e:
         log.exception("Error fetching sets from original app: %s", e)
         return jsonify({'sets': []})
 
+
 @app.route('/go', methods=['POST'])
 def go():
-    """
-    Host called /go. Forward to original app's /refresh (players := connected count),
-    then individually notify each connected client with their assigned starting pack index.
-    """
     data = request.get_json() or {}
     set_name = data.get('set')
 
-    # authoritative players count = number of non-admin connected clients
     players_to_use = len(connected_sids)
     if players_to_use <= 0:
         return jsonify({'error': 'No connected clients to start'}, 400)
 
-    payload = {'players': players_to_use}
+    payload = {'players': players_to_use, 'rounds': 3}
     if set_name is not None:
         payload['set'] = set_name
 
     log.info("Host requested go; forwarding to ORIGINAL_APP /refresh with payload: %s", payload)
 
-    # Call original app to generate packs
     try:
         r = requests.post(f"{ORIGINAL_APP}/refresh", json=payload, timeout=10)
         if r.status_code >= 400:
@@ -151,14 +142,10 @@ def go():
         log.exception("Failed to reach original app: %s", e)
         return jsonify({'error': 'Failed to reach original app: ' + str(e)}), 500
 
-    # number of packs generated (expected players*3)
-    num_packs = players_to_use * 3
-
-    # Assign each connected client a starting pack index based on connection order.
-    # If num_packs < number_of_clients (unlikely), we wrap mod num_packs.
+    # Assign each connected client a starting pack index (0..players-1)
     notified = 0
     for i, sid in enumerate(list(connected_sids)):
-        assigned_index = i % num_packs
+        assigned_index = i % players_to_use
         name = sid_to_name.get(sid, '')
         try:
             socketio.emit('go', {'pack_index': assigned_index, 'name': name, 'players': players_to_use}, to=sid)
@@ -169,6 +156,22 @@ def go():
     log.info("Go emitted to %s clients (connected=%s)", notified, len(connected_sids))
     return jsonify({'ok': True, 'notified_clients': notified})
 
+
+@app.route('/notify', methods=['POST'])
+def notify():
+    """
+    Endpoint for app.py to POST updates. This simply forwards the JSON payload to all connected clients
+    as a 'packs_update' socket event.
+    """
+    data = request.get_json() or {}
+    try:
+        socketio.emit('packs_update', data)
+        return jsonify({'ok': True})
+    except Exception as e:
+        log.exception("Failed to emit packs_update: %s", e)
+        return jsonify({'ok': False, 'error': str(e)}), 500
+
+
 @socketio.on('connect')
 def on_connect():
     sid = request.sid
@@ -177,28 +180,25 @@ def on_connect():
     log.info("Socket connect sid=%s source=%s name=%s", sid, src, name)
 
     if src == 'admin':
-        # admin clients: send current count but do not add to connected list
         socketio.emit('user_count', len(connected_sids), to=sid)
         return
 
-    # require a name for non-admin clients; if missing, disconnect
     if not name:
         try:
             socketio.emit('error', {'error': 'name required'}, to=sid)
         except Exception:
             pass
-        # disconnect the socket gracefully
         try:
             socketio.disconnect(sid)
         except Exception:
             pass
         return
 
-    # Register the client
     sid_to_name[sid] = name
     connected_sids.append(sid)
     socketio.emit('user_count', len(connected_sids))
     log.info("Client registered: sid=%s name=%s count=%s", sid, name, len(connected_sids))
+
 
 @socketio.on('disconnect')
 def on_disconnect():
@@ -208,13 +208,13 @@ def on_disconnect():
     if src == 'admin':
         return
 
-    # remove from connected lists if present
     if sid in connected_sids:
         connected_sids.remove(sid)
     if sid in sid_to_name:
         del sid_to_name[sid]
     socketio.emit('user_count', len(connected_sids))
     log.info("Client removed: sid=%s count=%s", sid, len(connected_sids))
+
 
 if __name__ == '__main__':
     log.info("Starting presence_app on port %s, forwarding to ORIGINAL_APP=%s", PRESENCE_PORT, ORIGINAL_APP)
