@@ -1,356 +1,94 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Random Image Packs with Deck</title>
-    <style>
-        body {
-            font-family: Arial, sans-serif;
-            background: #222;
-            color: white;
-            margin: 0;
-            padding: 0;
-            padding-bottom: 150px; /* space for fixed footer */
-        }
-
-        header {
-            background-color: #111;
-            padding: 15px 20px;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            border-bottom: 2px solid #444;
-        }
-
-        header button {
-            background: #ff6600;
-            color: white;
-            border: none;
-            padding: 10px 15px;
-            font-size: 16px;
-            cursor: pointer;
-            border-radius: 5px;
-        }
-
-        #pack-info {
-            font-size: 16px;
-        }
-
-        #image-container {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-            gap: 15px;
-            justify-items: center;
-            padding: 20px;
-            z-index: 0; /* ensure it's above background elements */
-        }
-
-        .image-card {
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            cursor: pointer;
-            width: 100%;
-            pointer-events: auto; /* ensure pointer events are enabled */
-        }
-
-        img {
-            width: 100%;
-            height: auto;
-            object-fit: contain;
-            background: #000;
-            border-radius: 8px;
-            border: 2px solid #444;
-            padding: 5px;
-            transition: transform 0.2s;
-        }
-
-        img:hover {
-            transform: scale(1.05);
-        }
-
-        .name {
-            margin-top: 8px;
-            font-size: 16px;
-            font-weight: bold;
-            color: #f0f0f0;
-            text-align: center;
-        }
-
-        footer {
-            position: fixed;
-            bottom: 0;
-            left: 0;
-            right: 0;
-            background: #111;
-            border-top: 2px solid #444;
-            padding: 10px 20px;
-            display: flex;
-            flex-wrap: wrap;
-            gap: 10px;
-            max-height: 140px;
-            overflow-x: auto;
-            overflow-y: hidden;
-        }
-
-        .deck-card {
-            width: 100px;
-            flex-shrink: 0;
-            text-align: center;
-        }
-
-        .deck-card img {
-            width: 100%;
-            border-radius: 6px;
-            border: 1px solid #555;
-        }
-
-        .deck-card .name {
-            font-size: 12px;
-            color: #f0f0f0;
-            margin-top: 3px;
-        }
-
-        /* Start screen styles */
-        #start-screen {
-            display: flex;
-            flex-direction: column;
-            align-items: flex-start;
-            gap: 12px;
-            padding: 40px;
-        }
-
-        .control-row {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-        }
-
-        label {
-            min-width: 70px;
-        }
-
-        select, button {
-            padding: 8px 10px;
-            font-size: 14px;
-        }
-
-    </style>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>InfiniteDraft — Waiting Room</title>
+  <style>
+    body { font-family: Arial, sans-serif; background:#222; color:#eee; padding:24px; }
+    .center { max-width:720px; margin:28px auto; }
+    .count { font-size:18px; color:#dcdcdc; margin-top:12px; }
+    .notice { margin-top:20px; color:#bdbdbd; }
+    .join { margin-top:18px; display:flex; gap:8px; align-items:center; }
+    input[type="text"] { padding:8px; font-size:16px; border-radius:4px; border:1px solid #444; background:#111; color:#eee; }
+    button { padding:8px 12px; font-size:16px; cursor:pointer; }
+    #nameLabel { color:#ddd; margin-right:8px; }
+  </style>
 </head>
 <body>
+  <div class="center">
+    <h1>Waiting Room</h1>
 
-    <!-- Start screen: only this should be visible on initial load -->
-    <div id="start-screen">
-        <h1>InfiniteDraft</h1>
-
-        <div class="control-row">
-            <label for="setSelect">Set:</label>
-            <select id="setSelect"></select>
-        </div>
-
-        <div class="control-row">
-            <label for="playersSelect">Players:</label>
-            <select id="playersSelect"></select>
-        </div>
-
-        <div class="control-row">
-            <button id="goBtn">Go!</button>
-        </div>
-
+    <div>
+      <label id="nameLabel">Enter your name to join the waiting room:</label>
+      <div class="join">
+        <input id="nameInput" type="text" placeholder="Your name" />
+        <button id="joinBtn">Join</button>
+      </div>
     </div>
 
-    <!-- Main UI (packs + deck) — hidden until Go is pressed -->
-    <div id="main-ui" style="display:none;">
-        <header>
-            <div id="pack-info">Pack {{ pack_number }} / {{ total_packs }}</div>
-            <button onclick="refreshPack()">🔄 Refresh</button>
-        </header>
+    <div class="count">Connected users: <span id="count"></span></div>
 
-        <div id="image-container">
-            <!-- cards will be rendered here by JS after Go -->
-        </div>
+    <div class="notice">This page waits for the host to press Go on the host page. When the host starts the draft, you'll be redirected to the draft page and start on a pack assigned to you.</div>
+  </div>
 
-        <footer id="deck-container">
-            <!-- deck cards rendered by JS -->
-        </footer>
-    </div>
+  <script src="https://cdn.socket.io/4.5.3/socket.io.min.js"></script>
+  <script>
+    // Configure presence server address (change if needed)
+    const PRESENCE_SERVER = (window.__PRESENCE_SERVER__ || 'http://localhost:5001');
 
-    <script>
-    let currentPackIndex = 0; // 0-based index for packs
-    let packs = [];           // array of packs
-    let deck = [];            // array of selected cards
+    let socket = null;
+    let myName = '';
 
-    // Populate set dropdown from server (optional; selections ignored for now)
-    async function fetchSets() {
-        try {
-            const res = await fetch('/get_sets');
-            const json = await res.json();
-            const select = document.getElementById('setSelect');
-            // Clear existing options
-            select.innerHTML = '';
-            json.sets.forEach(s => {
-                const opt = document.createElement('option');
-                opt.value = s;
-                opt.textContent = s;
-                select.appendChild(opt);
-            });
-        } catch (e) {
-            // ignore if endpoint doesn't exist; dropdown remains empty/inert
-        }
+    function connectWithName(name) {
+      // connect with name as query param; this ensures server has the name
+      socket = io(PRESENCE_SERVER + '?name=' + encodeURIComponent(name), { transports: ['websocket', 'polling'] });
+
+      socket.on('connect', () => {
+        console.log('connected to presence server as', name);
+      });
+
+      socket.on('user_count', n => {
+        document.getElementById('count').textContent = n;
+      });
+
+      socket.on('go', data => {
+        // 'go' for this client will include pack_index assigned to this client by presence server
+        console.log('go event received', data);
+        const pi = data && typeof data.pack_index !== 'undefined' ? data.pack_index : 0;
+        // redirect to draft with start index and name
+        window.location.href = '/draft?start=' + encodeURIComponent(pi) + '&name=' + encodeURIComponent(name);
+      });
+
+      socket.on('disconnect', () => {
+        console.log('disconnected from presence server');
+      });
+
+      socket.on('error', err => {
+        console.warn('socket error', err);
+      });
     }
 
-    function populatePlayers() {
-        const select = document.getElementById('playersSelect');
-        for (let i = 1; i <= 8; i++) {
-            const opt = document.createElement('option');
-            opt.value = i;
-            opt.textContent = i;
-            select.appendChild(opt);
-        }
-        select.value = '5'; // default
-    }
-
-    document.addEventListener('DOMContentLoaded', () => {
-        populatePlayers();
-        fetchSets();
-
-        // Go button: send chosen set + players to server and load packs
-        document.getElementById('goBtn').addEventListener('click', async () => {
-            const setVal = document.getElementById('setSelect').value || null;
-            const playersVal = document.getElementById('playersSelect').value || null;
-
-            try {
-                const res = await fetch('/refresh', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ set: setVal, players: playersVal })
-                });
-                const json = await res.json();
-                // use server-generated packs exactly as before
-                packs = json.packs || [];
-                deck = json.deck || [];
-                currentPackIndex = 0;
-
-                // hide start screen, show main UI
-                document.getElementById('start-screen').style.display = 'none';
-                document.getElementById('main-ui').style.display = '';
-
-                // render the first pack and deck
-                updatePack(packs[currentPackIndex] || []);
-                updateDeck(deck);
-            } catch (err) {
-                console.error('Error on Go:', err);
-            }
-        });
+    document.getElementById('joinBtn').addEventListener('click', () => {
+      const nameEl = document.getElementById('nameInput');
+      const name = (nameEl.value || '').trim();
+      if (!name) {
+        alert('Please enter your name before joining the waiting room.');
+        return;
+      }
+      myName = name;
+      // disable input and join button after connecting
+      nameEl.disabled = true;
+      document.getElementById('joinBtn').disabled = true;
+      connectWithName(name);
     });
 
-    function bindCardClicks() {
-        const cards = document.querySelectorAll('#image-container .image-card');
-        cards.forEach(card => {
-            card.onclick = () => {
-                const name = card.querySelector('.name').textContent;
-                handleCardClick(name);
-            };
-        });
-    }
-
-    function handleCardClick(name) {
-        // Find the card object in the current pack
-        const cardIndex = packs[currentPackIndex].findIndex(c => c.name === name);
-        if (cardIndex === -1) return;
-
-        // Move card to deck
-        deck.push(packs[currentPackIndex][cardIndex]);
-        packs[currentPackIndex].splice(cardIndex, 1);
-
-        // Switch to next pack
-        currentPackIndex = (currentPackIndex + 1) % packs.length;
-
-        updatePack(packs[currentPackIndex]);
-        updateDeck(deck);
-    }
-
-    function updatePack(pack) {
-        const container = document.getElementById('image-container');
-        container.innerHTML = '';
-
-        // Update the Pack info in the header
-        const packInfoEl = document.getElementById('pack-info');
-        packInfoEl.textContent = `Pack ${currentPackIndex + 1} / ${packs.length}`;
-
-        // Render the cards
-        pack.forEach(img => {
-            const card = document.createElement('div');
-            card.className = 'image-card';
-
-            const imageEl = document.createElement('img');
-            imageEl.src = img.url;
-            imageEl.alt = img.name;
-
-            const nameEl = document.createElement('div');
-            nameEl.className = 'name';
-            nameEl.textContent = img.name;
-
-            card.appendChild(imageEl);
-            card.appendChild(nameEl);
-            container.appendChild(card);
-        });
-
-        // Rebind click events after DOM update
-        bindCardClicks();
-    }
-
-    function updateDeck(deck) {
-        const deckContainer = document.getElementById('deck-container');
-        deckContainer.innerHTML = '';
-
-        if (deck.length === 0) {
-            deckContainer.innerHTML = '<em>No cards in deck yet</em>';
-            return;
-        }
-
-        deck.forEach(img => {
-            const card = document.createElement('div');
-            card.className = 'deck-card';
-
-            const imageEl = document.createElement('img');
-            imageEl.src = img.url;
-            imageEl.alt = img.name;
-
-            const nameEl = document.createElement('div');
-            nameEl.className = 'name';
-            nameEl.textContent = img.name;
-
-            card.appendChild(imageEl);
-            card.appendChild(nameEl);
-            deckContainer.appendChild(card);
-        });
-    }
-
-    function refreshPack() {
-        fetch('/refresh', { method: 'POST' })
-            .then(response => response.json())
-            .then(data => {
-                packs = data.packs;      // updated packs from server
-                deck = [];               // clear deck
-                currentPackIndex = 0;    // reset to first pack
-
-                // Update header pack info
-                const packInfoEl = document.getElementById('pack-info');
-                packInfoEl.textContent = `Pack ${currentPackIndex + 1} / ${packs.length}`;
-
-                // Display first pack
-                updatePack(packs[currentPackIndex]);
-
-                // Update deck footer (clears it)
-                updateDeck(deck);
-            })
-            .catch(err => {
-                console.error('Failed to refresh packs:', err);
-            });
-    }
-    </script>
-
+    // allow Enter key to join
+    document.getElementById('nameInput').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        document.getElementById('joinBtn').click();
+      }
+    });
+  </script>
 </body>
 </html>

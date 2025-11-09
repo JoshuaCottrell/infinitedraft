@@ -23,7 +23,6 @@ def load_cards_from_csv_path(file_path):
         with open(file_path, newline='', encoding='utf-8') as csvfile:
             reader = csv.DictReader(csvfile)
             for row in reader:
-                # expecting 'name' and 'image_url' columns
                 cards.append({'name': row.get('name', '').strip(), 'url': row.get('image_url', '').strip()})
     except FileNotFoundError:
         return []
@@ -77,9 +76,14 @@ generate_packs_from_all_cards()
 def index():
     return render_template('index.html')
 
+@app.route('/draft')
+def draft():
+    return render_template('draft.html')
+
 @app.route('/get_packs')
 def get_packs():
-    return jsonify({'packs': packs})
+    # include current_pack_index for backward compatibility
+    return jsonify({'packs': packs, 'current_pack_index': current_pack_index})
 
 @app.route('/get_sets')
 def get_sets():
@@ -89,35 +93,42 @@ def get_sets():
 @app.route('/click', methods=['POST'])
 def click():
     global current_pack_index, packs, deck
-    data = request.get_json()
-    name = data.get('name') if isinstance(data, dict) else None
+    data = request.get_json() or {}
+    name = data.get('name')
+    pack_index_in_request = data.get('pack_index')
 
     if not name:
         return jsonify({'error': 'No card name provided'}), 400
-
     if not packs:
         return jsonify({'error': 'No packs loaded'}), 400
 
-    # Find card in current pack
-    current_pack = packs[current_pack_index]
-    card_index = next((i for i, c in enumerate(current_pack) if c['name'] == name), None)
-    if card_index is None:
-        return jsonify({'error': 'Card not found in current pack'}), 404
-
-    # Move card to deck
-    card = current_pack.pop(card_index)
-    deck.append(card)
-
-    # Move to next pack (use current number of packs)
-    if packs:
-        current_pack_index = (current_pack_index + 1) % len(packs)
+    # If a pack_index was provided, operate on that pack (per-client behavior).
+    if isinstance(pack_index_in_request, int):
+        if pack_index_in_request < 0 or pack_index_in_request >= len(packs):
+            return jsonify({'error': 'Invalid pack index'}), 400
+        current_pack = packs[pack_index_in_request]
+        card_index = next((i for i, c in enumerate(current_pack) if c['name'] == name), None)
+        if card_index is None:
+            return jsonify({'error': 'Card not found in specified pack'}), 404
+        card = current_pack.pop(card_index)
+        deck.append(card)
+        # Do NOT modify global current_pack_index in per-client mode.
+        return jsonify({'deck': deck})
     else:
-        current_pack_index = 0
-
-    return jsonify({
-        'pack': packs[current_pack_index] if packs else [],
-        'deck': deck
-    })
+        # Backward-compatible single-client behavior (use global current_pack_index)
+        if current_pack_index >= len(packs):
+            current_pack_index = 0
+        current_pack = packs[current_pack_index]
+        card_index = next((i for i, c in enumerate(current_pack) if c['name'] == name), None)
+        if card_index is None:
+            return jsonify({'error': 'Card not found in current pack'}), 404
+        card = current_pack.pop(card_index)
+        deck.append(card)
+        if packs:
+            current_pack_index = (current_pack_index + 1) % len(packs)
+        else:
+            current_pack_index = 0
+        return jsonify({'pack': packs[current_pack_index] if packs else [], 'deck': deck, 'current_pack_index': current_pack_index})
 
 @app.route('/refresh', methods=['POST'])
 def refresh():
@@ -142,7 +153,7 @@ def refresh():
             p = int(players)
             if p < 1:
                 p = 1
-            # no more than 8 players (optional clamp), adjust as desired
+            # clamp to 8 players
             if p > 8:
                 p = 8
             num_packs_to_load = p * 3
@@ -171,16 +182,23 @@ def refresh():
         else:
             # fallback: if no pack folders found or players invalid, fallback to root behavior
             all_cards = load_cards_from_csv()
+            # respect players when falling back
+            if num_packs_to_load:
+                NUM_PACKS = num_packs_to_load
             generate_packs_from_all_cards()
     else:
         # No set specified: fallback to original behavior
         all_cards = load_cards_from_csv()
+        # respect players when falling back
+        if num_packs_to_load:
+            NUM_PACKS = num_packs_to_load
         generate_packs_from_all_cards()
 
     deck = []
     current_pack_index = 0
 
-    return jsonify({'packs': packs, 'deck': deck})
+    # include current_pack_index so clients can sync
+    return jsonify({'packs': packs, 'deck': deck, 'current_pack_index': current_pack_index})
 
 if __name__ == '__main__':
     app.run(debug=True)

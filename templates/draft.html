@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>InfiniteDraft</title>
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        margin: 0;
+        padding: 20px;
+        background: #222;
+        color: #eee;
+      }
+      header {
+        background-color: #111;
+        padding: 12px 16px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        border-bottom: 2px solid #444;
+      }
+      #pack-info {
+        font-size: 16px;
+      }
+      #presence-info {
+        font-size: 13px;
+        color: #ccc;
+        margin-left: 12px;
+      }
+      #image-container {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+        gap: 15px;
+        justify-items: center;
+        padding: 20px;
+        z-index: 0;
+      }
+      .image-card {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        cursor: pointer;
+        width: 100%;
+      }
+      img {
+        width: 100%;
+        height: auto;
+        object-fit: contain;
+        background: #000;
+        border-radius: 8px;
+        border: 2px solid #444;
+        padding: 5px;
+        transition: transform 0.2s;
+      }
+      img:hover { transform: scale(1.05); }
+      .name {
+        margin-top: 8px;
+        font-size: 16px;
+        font-weight: bold;
+        color: #f0f0f0;
+        text-align: center;
+      }
+      footer {
+        position: fixed;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        background: #111;
+        border-top: 2px solid #444;
+        padding: 10px 20px;
+        display: flex;
+        gap: 10px;
+        max-height: 140px;
+        overflow-x: auto;
+        overflow-y: hidden;
+      }
+      .deck-card { width: 100px; flex-shrink: 0; text-align: center; }
+      .deck-card img { width: 100%; border-radius: 6px; border: 1px solid #555; }
+      .deck-card .name { font-size: 12px; color: #f0f0f0; margin-top: 3px; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div id="pack-info">Pack <span id="pack-num">1</span> / <span id="total-packs">0</span> <span id="presence-info"></span></div>
+    </header>
+
+    <div id="image-container"></div>
+
+    <footer id="deck-container"></footer>
+
+    <script src="https://cdn.socket.io/4.5.3/socket.io.min.js"></script>
+    <script>
+      const PRESENCE_SERVER = 'http://localhost:5001'; // adjust if necessary
+      let presenceSocket = null;
+      let packs = [];
+      let deck = [];
+      // client-local current pack index (starts from URL start param)
+      let currentPackIndex = 0;
+
+      // parse a url query parameter
+      function queryParam(name) {
+        const params = new URLSearchParams(window.location.search);
+        return params.has(name) ? params.get(name) : null;
+      }
+
+      // load packs and (if provided) respect server-provided index otherwise keep client's own
+      async function loadPacks() {
+        try {
+          const res = await fetch('/get_packs');
+          const j = await res.json();
+          packs = j.packs || [];
+          // If server sent a global current_pack_index, we won't overwrite client's assigned start.
+          // Client's assigned start comes from URL param "start".
+          // Ensure client's currentPackIndex is valid.
+          if (!packs || packs.length === 0) {
+            document.getElementById('pack-num').textContent = '0';
+            document.getElementById('total-packs').textContent = 0;
+            renderPack();
+            renderDeck();
+            return;
+          }
+          if (currentPackIndex >= packs.length) currentPackIndex = 0;
+          document.getElementById('total-packs').textContent = packs.length;
+          renderPack();
+          renderDeck();
+        } catch (e) {
+          console.error('Failed to get packs', e);
+        }
+      }
+
+      function renderPack() {
+        const container = document.getElementById('image-container');
+        container.innerHTML = '';
+        if (!packs || packs.length === 0) {
+          document.getElementById('pack-num').textContent = '0';
+          return;
+        }
+        document.getElementById('pack-num').textContent = currentPackIndex + 1;
+        const pack = packs[currentPackIndex] || [];
+        pack.forEach(card => {
+          const div = document.createElement('div');
+          div.className = 'image-card';
+          const img = document.createElement('img');
+          img.src = card.url;
+          img.alt = card.name;
+          const name = document.createElement('div');
+          name.className = 'name';
+          name.textContent = card.name;
+          div.appendChild(img);
+          div.appendChild(name);
+          div.onclick = () => pickCard(card.name);
+          container.appendChild(div);
+        });
+      }
+
+      function renderDeck() {
+        const footer = document.getElementById('deck-container');
+        footer.innerHTML = '';
+        if (!deck || deck.length === 0) {
+          footer.innerHTML = '<em style="color:#bbb">No cards in deck yet</em>';
+          return;
+        }
+        deck.forEach(c => {
+          const d = document.createElement('div');
+          d.className = 'deck-card';
+          const img = document.createElement('img'); img.src = c.url; img.alt = c.name;
+          const nm = document.createElement('div'); nm.className = 'name'; nm.textContent = c.name;
+          d.appendChild(img); d.appendChild(nm);
+          footer.appendChild(d);
+        });
+      }
+
+      async function pickCard(name) {
+        try {
+          // send the client's current pack index so the server modifies the correct pack
+          const res = await fetch('/click', {
+            method: 'POST',
+            headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({ name, pack_index: currentPackIndex })
+          });
+          const j = await res.json();
+          if (!res.ok) {
+            alert(j.error || 'error');
+            return;
+          }
+          // server responded ok; update local deck if provided
+          if (j.deck) {
+            deck = j.deck;
+            renderDeck();
+          }
+          // advance this client's view to the next pack (client-local rotation)
+          if (packs && packs.length > 0) {
+            currentPackIndex = (currentPackIndex + 1) % packs.length;
+          } else {
+            currentPackIndex = 0;
+          }
+          // reload packs to reflect removed card(s)
+          await loadPacks();
+        } catch (e) {
+          console.error(e);
+        }
+      }
+
+      // legacy: server-side refresh (no UI trigger in this version)
+      function refreshPack() {
+        fetch('/refresh', { method: 'POST' })
+          .then(r => r.json())
+          .then(j => {
+            packs = j.packs || [];
+            deck = j.deck || [];
+            if (typeof j.current_pack_index !== 'undefined' && j.current_pack_index !== null) {
+              // don't overwrite client's assignment unless no URL start provided
+              if (!queryParam('start')) currentPackIndex = j.current_pack_index;
+            } else {
+              currentPackIndex = 0;
+            }
+            document.getElementById('total-packs').textContent = packs.length;
+            renderPack();
+            renderDeck();
+          }).catch(e => console.error(e));
+      }
+
+      function connectPresence(name) {
+        if (presenceSocket) return;
+        presenceSocket = io(PRESENCE_SERVER + '?name=' + encodeURIComponent(name), { transports: ['websocket', 'polling'] });
+        presenceSocket.on('user_count', n => {
+          const el = document.getElementById('presence-info');
+          el.textContent = `• ${n} user${n===1? '':'s'} connected`;
+        });
+        presenceSocket.on('disconnect', () => {
+          document.getElementById('presence-info').textContent = '';
+        });
+      }
+
+      // initialize
+      // if page loaded via redirect from waiting room, it includes start and name params
+      (function init() {
+        const startParam = queryParam('start');
+        const nameParam = queryParam('name');
+        if (startParam !== null) {
+          const parsed = parseInt(startParam, 10);
+          if (!Number.isNaN(parsed)) currentPackIndex = parsed;
+        } else {
+          currentPackIndex = 0;
+        }
+        if (nameParam) {
+          connectPresence(nameParam);
+        } else {
+          // try to connect anonymously for presence (optional) — skip to avoid being counted without explicit name
+        }
+        loadPacks();
+      })();
+
+      window.addEventListener('beforeunload', () => {
+        if (presenceSocket) presenceSocket.disconnect();
+      });
+    </script>
+  </body>
+</html>
