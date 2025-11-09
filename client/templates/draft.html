@@ -32,6 +32,7 @@
         justify-items: center;
         padding: 20px;
         z-index: 0;
+        min-height: 240px;
       }
       .image-card { display:flex; flex-direction:column; align-items:center; cursor:pointer; width:100%; }
       img { width:100%; height:auto; object-fit:contain; background:#000; border-radius:8px; border:2px solid #444; padding:5px; transition:transform .2s; }
@@ -41,6 +42,7 @@
       .deck-card { width:100px; flex-shrink:0; text-align:center; }
       .deck-card img { width:100%; border-radius:6px; border:1px solid #555; }
       .deck-card .name { font-size:12px; color:#f0f0f0; margin-top:3px; }
+      .center-wait { display:flex; justify-content:center; align-items:center; height:100%; font-weight:bold; color:#ffcc00; font-size:18px; }
     </style>
   </head>
   <body>
@@ -62,13 +64,20 @@
 
     <script src="https://cdn.socket.io/4.5.3/socket.io.min.js"></script>
     <script>
-      const PRESENCE_SERVER = 'http://localhost:5001';
+      // PRESENCE_SERVER injected by Flask
+      const PRESENCE_SERVER = "{{ PRESENCE_SERVER|e }}";
+
       let presenceSocket = null;
       let packs = [];
+      // per-client deck for current player
       let deck = [];
       let currentPackIndex = 0;
       let currentRound = 0;
       let totalRounds = 1;
+
+      // waiting state
+      let isWaiting = false;
+      let waitingOnIndex = null;
 
       function queryParam(name) {
         const params = new URLSearchParams(window.location.search);
@@ -77,7 +86,7 @@
 
       async function loadPacks() {
         try {
-          const res = await fetch('/get_packs');
+          const res = await fetch(PRESENCE_SERVER + '/get_packs');
           const j = await res.json();
           packs = j.packs || [];
           if (typeof j.current_round !== 'undefined') currentRound = j.current_round;
@@ -95,6 +104,19 @@
       function renderPack() {
         const container = document.getElementById('image-container');
         container.innerHTML = '';
+
+        // If client is waiting for the next pack, do not show the current pack; show waiting message in center.
+        if (isWaiting) {
+          const div = document.createElement('div');
+          div.className = 'center-wait';
+          div.textContent = 'Waiting for the next pack...';
+          container.appendChild(div);
+          document.getElementById('waiting-msg').style.display = '';
+          return;
+        } else {
+          document.getElementById('waiting-msg').style.display = 'none';
+        }
+
         if (!packs || packs.length === 0) {
           document.getElementById('pack-num').textContent = '0';
           return;
@@ -121,7 +143,7 @@
         const footer = document.getElementById('deck-container');
         footer.innerHTML = '';
         if (!deck || deck.length === 0) {
-          footer.innerHTML = '<em style="color:#bbb">No cards in deck yet</em>';
+          footer.innerHTML = '<em style="color:#bbb">No cards in your deck yet</em>';
           return;
         }
         deck.forEach(c => {
@@ -134,13 +156,27 @@
         });
       }
 
-      async function pickCard(name) {
-        hideWaitingMsg();
+      async function pickCard(cardName) {
+        // When picking, include both player's name and the card name and the round we believe we're in.
+        const playerName = queryParam('name');
+        if (!playerName) {
+          alert('No player name present; please rejoin from the waiting room.');
+          return;
+        }
+
+        // clear any previous waiting poll
+        clearWaitPoll();
+
         try {
-          const res = await fetch('/click', {
+          const res = await fetch(PRESENCE_SERVER + '/click', {
             method: 'POST',
             headers: {'Content-Type':'application/json'},
-            body: JSON.stringify({ name, pack_index: currentPackIndex })
+            body: JSON.stringify({
+              player: playerName,
+              card: cardName,
+              pack_index: currentPackIndex,
+              round: currentRound
+            })
           });
           const j = await res.json();
           if (!res.ok) {
@@ -148,54 +184,67 @@
             return;
           }
 
+          // server returns the player's deck
           if (j.deck) {
             deck = j.deck;
             renderDeck();
           }
 
           if (j.advanced) {
+            // server allowed immediate advance
             currentPackIndex = j.next_pack_index;
             if (typeof j.current_round !== 'undefined') currentRound = j.current_round;
+            isWaiting = false;
+            waitingOnIndex = null;
             await loadPacks();
-            hideWaitingMsg();
+            document.getElementById('waiting-msg').style.display = 'none';
           } else {
-            // need to wait on j.waiting_on
-            startWaiting(j.waiting_on);
+            // must wait for next pack; hide current pack and show waiting message
+            isWaiting = true;
+            waitingOnIndex = j.waiting_on;
+            document.getElementById('waiting-msg').style.display = '';
+            startWaiting(waitingOnIndex);
           }
         } catch (e) {
           console.error(e);
         }
       }
 
-      function showWaitingMsg() { document.getElementById('waiting-msg').style.display = ''; }
-      function hideWaitingMsg() { document.getElementById('waiting-msg').style.display = 'none'; }
-
       let waitPollHandle = null;
       function startWaiting(packIndex) {
-        showWaitingMsg();
-        // rely on realtime 'packs_update' events, but also fallback to polling every 1s
+        // We still use the polling fallback but also respond to real-time 'packs_update' events
         clearInterval(waitPollHandle);
         waitPollHandle = setInterval(async () => {
           try {
-            // check readiness via /get_packs
-            const res = await fetch('/get_packs');
+            const res = await fetch(PRESENCE_SERVER + '/get_packs');
             const j = await res.json();
             const ready = j.packs_ready || [];
             if (ready[packIndex]) {
-              // attempt to claim
-              const claimRes = await fetch('/claim_pack', {
+              // attempt claim including player name and round
+              const playerName = queryParam('name');
+              const claimRes = await fetch(PRESENCE_SERVER + '/claim_pack', {
                 method: 'POST',
                 headers: {'Content-Type':'application/json'},
-                body: JSON.stringify({ pack_index: packIndex })
+                body: JSON.stringify({ pack_index: packIndex, name: playerName, round: currentRound })
               });
               const cj = await claimRes.json();
               if (claimRes.ok && cj.ok) {
+                // claim succeeded: set current pack to this index and stop waiting
                 currentPackIndex = packIndex;
-                hideWaitingMsg();
+                isWaiting = false;
+                waitingOnIndex = null;
                 clearInterval(waitPollHandle);
+                // update deck if returned
+                if (cj.deck) {
+                  deck = cj.deck;
+                  renderDeck();
+                } else {
+                  // fetch deck if missing
+                  await fetchDeck(playerName);
+                }
                 await loadPacks();
               } else {
-                // continue waiting
+                // claim failed: continue polling / wait for packs_update
                 console.warn('claim failed', cj);
               }
             }
@@ -212,6 +261,17 @@
         }
       }
 
+      async function fetchDeck(name) {
+        try {
+          const res = await fetch(PRESENCE_SERVER + '/get_deck?name=' + encodeURIComponent(name));
+          const j = await res.json();
+          deck = j.deck || [];
+          renderDeck();
+        } catch (e) {
+          console.error('failed to fetch deck', e);
+        }
+      }
+
       function connectPresence(name) {
         if (presenceSocket) return;
         presenceSocket = io(PRESENCE_SERVER + '?name=' + encodeURIComponent(name), { transports: ['websocket', 'polling'] });
@@ -222,25 +282,60 @@
         });
 
         presenceSocket.on('packs_update', data => {
-          // receive realtime notification from app via presence server
-          // simply reload current packs to sync state
-          console.log('packs_update', data);
-          // If waiting on a pack and data indicates it's ready, immediately attempt to claim
-          if (data && typeof data.packs_ready !== 'undefined') {
-            // if the pack we're waiting on became ready, claim immediately by letting startWaiting's poll detect it,
-            // or we can proactively attempt claim. We'll proactively attempt claim if waiting.
-            // (To keep simple, just reload packs)
-            loadPacks();
+          // realtime notification: if we are waiting and our waiting pack became ready, try claiming proactively
+          if (isWaiting && waitingOnIndex !== null && data && data.packs_ready && data.packs_ready[waitingOnIndex]) {
+            (async () => {
+              const playerName = queryParam('name');
+              try {
+                const claimRes = await fetch(PRESENCE_SERVER + '/claim_pack', {
+                  method: 'POST',
+                  headers: {'Content-Type':'application/json'},
+                  body: JSON.stringify({ pack_index: waitingOnIndex, name: playerName, round: data.current_round })
+                });
+                const cj = await claimRes.json();
+                if (claimRes.ok && cj.ok) {
+                  currentPackIndex = waitingOnIndex;
+                  isWaiting = false;
+                  waitingOnIndex = null;
+                  clearWaitPoll();
+                  if (cj.deck) {
+                    deck = cj.deck;
+                    renderDeck();
+                  } else {
+                    await fetchDeck(playerName);
+                  }
+                  // Update authoritative state from the payload's snapshot if present
+                  if (data && typeof data.current_round !== 'undefined') {
+                    currentRound = data.current_round;
+                    packs = data.packs || packs;
+                    document.getElementById('total-packs').textContent = packs.length;
+                    document.getElementById('round-num').textContent = (currentRound + 1);
+                  }
+                  await loadPacks();
+                }
+              } catch (e) {
+                console.error('proactive claim error', e);
+              }
+            })();
           } else {
+            // general update: honor authoritative snapshot in payload if present, then reload packs
+            if (data && typeof data.current_round !== 'undefined') {
+              currentRound = data.current_round;
+              packs = data.packs || packs;
+              document.getElementById('total-packs').textContent = packs.length;
+              document.getElementById('round-num').textContent = (currentRound + 1);
+            }
             loadPacks();
           }
         });
 
         presenceSocket.on('go', d => {
-          // go event for this client includes pack_index and name
           if (d && typeof d.pack_index !== 'undefined') {
             currentPackIndex = d.pack_index;
           }
+          // client assigned start: fetch deck for this player
+          const nameParam = queryParam('name');
+          if (nameParam) fetchDeck(nameParam);
           loadPacks();
         });
 
@@ -249,7 +344,6 @@
         });
       }
 
-      // initialize: read start and name params from URL (provided by waiting room redirect)
       (function init() {
         const startParam = queryParam('start');
         const nameParam = queryParam('name');
@@ -259,7 +353,11 @@
         } else {
           currentPackIndex = 0;
         }
-        if (nameParam) connectPresence(nameParam);
+        if (nameParam) {
+          connectPresence(nameParam);
+          // fetch player's deck on load/reconnect
+          fetchDeck(nameParam);
+        }
         loadPacks();
       })();
 

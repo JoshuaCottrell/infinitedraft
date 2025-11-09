@@ -27,21 +27,20 @@
       </div>
     </div>
 
-    <div class="count">Connected users: <span id="count"></span></div>
+    <div class="count">Connected users: <span id="count">0</span></div>
 
     <div class="notice">This page waits for the host to press Go on the host page. When the host starts the draft, you'll be redirected to the draft page and start on a pack assigned to you.</div>
   </div>
 
   <script src="https://cdn.socket.io/4.5.3/socket.io.min.js"></script>
   <script>
-    // Configure presence server address (change if needed)
-    const PRESENCE_SERVER = (window.__PRESENCE_SERVER__ || 'http://localhost:5001');
+    // PRESENCE_SERVER is injected by the Flask client app when rendering the template.
+    const PRESENCE_SERVER = "{{ PRESENCE_SERVER|e }}";
 
     let socket = null;
     let myName = '';
 
     function connectWithName(name) {
-      // connect with name as query param; this ensures server has the name
       socket = io(PRESENCE_SERVER + '?name=' + encodeURIComponent(name), { transports: ['websocket', 'polling'] });
 
       socket.on('connect', () => {
@@ -53,10 +52,8 @@
       });
 
       socket.on('go', data => {
-        // 'go' for this client will include pack_index assigned to this client by presence server
         console.log('go event received', data);
         const pi = data && typeof data.pack_index !== 'undefined' ? data.pack_index : 0;
-        // redirect to draft with start index and name
         window.location.href = '/draft?start=' + encodeURIComponent(pi) + '&name=' + encodeURIComponent(name);
       });
 
@@ -77,13 +74,11 @@
         return;
       }
       myName = name;
-      // disable input and join button after connecting
       nameEl.disabled = true;
       document.getElementById('joinBtn').disabled = true;
       connectWithName(name);
     });
 
-    // allow Enter key to join
     document.getElementById('nameInput').addEventListener('keydown', (e) => {
       if (e.key === 'Enter') {
         document.getElementById('joinBtn').click();
