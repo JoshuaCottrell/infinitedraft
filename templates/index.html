@@ -46,7 +46,6 @@
             z-index: 0; /* ensure it's above background elements */
         }
 
-
         .image-card {
             display: flex;
             flex-direction: column;
@@ -55,7 +54,6 @@
             width: 100%;
             pointer-events: auto; /* ensure pointer events are enabled */
         }
-
 
         img {
             width: 100%;
@@ -114,50 +112,137 @@
             margin-top: 3px;
         }
 
+        /* Start screen styles */
+        #start-screen {
+            display: flex;
+            flex-direction: column;
+            align-items: flex-start;
+            gap: 12px;
+            padding: 40px;
+        }
+
+        .control-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        label {
+            min-width: 70px;
+        }
+
+        select, button {
+            padding: 8px 10px;
+            font-size: 14px;
+        }
+
     </style>
 </head>
 <body>
-    <header>
-        <div id="pack-info">Pack {{ pack_number }} / {{ total_packs }}</div>
-        <button onclick="refreshPack()">🔄 Refresh</button>
-    </header>
 
-    <div id="image-container">
-        {% for img in images %}
-        <div class="image-card" onclick="imageClicked('{{ img.name }}')">
-            <img src="{{ img.url }}" alt="{{ img.name }}">
-            <div class="name">{{ img.name }}</div>
+    <!-- Start screen: only this should be visible on initial load -->
+    <div id="start-screen">
+        <h1>InfiniteDraft</h1>
+
+        <div class="control-row">
+            <label for="setSelect">Set:</label>
+            <select id="setSelect"></select>
         </div>
-        {% endfor %}
+
+        <div class="control-row">
+            <label for="playersSelect">Players:</label>
+            <select id="playersSelect"></select>
+        </div>
+
+        <div class="control-row">
+            <button id="goBtn">Go!</button>
+        </div>
+
     </div>
 
-    <footer id="deck-container">
-        {% for img in deck %}
-        <div class="deck-card">
-            <img src="{{ img.url }}" alt="{{ img.name }}">
-            <div class="name">{{ img.name }}</div>
+    <!-- Main UI (packs + deck) — hidden until Go is pressed -->
+    <div id="main-ui" style="display:none;">
+        <header>
+            <div id="pack-info">Pack {{ pack_number }} / {{ total_packs }}</div>
+            <button onclick="refreshPack()">🔄 Refresh</button>
+        </header>
+
+        <div id="image-container">
+            <!-- cards will be rendered here by JS after Go -->
         </div>
-        {% endfor %}
-    </footer>
-    
 
+        <footer id="deck-container">
+            <!-- deck cards rendered by JS -->
+        </footer>
+    </div>
 
-    
     <script>
     let currentPackIndex = 0; // 0-based index for packs
     let packs = [];           // array of packs
     let deck = [];            // array of selected cards
 
-    document.addEventListener("DOMContentLoaded", () => {
-        fetch("/get_packs")
-            .then(response => response.json())
-            .then(data => {
-                packs = data.packs; // array of arrays
-                updatePack(packs[currentPackIndex]);
-                updateDeck(deck);
+    // Populate set dropdown from server (optional; selections ignored for now)
+    async function fetchSets() {
+        try {
+            const res = await fetch('/get_sets');
+            const json = await res.json();
+            const select = document.getElementById('setSelect');
+            // Clear existing options
+            select.innerHTML = '';
+            json.sets.forEach(s => {
+                const opt = document.createElement('option');
+                opt.value = s;
+                opt.textContent = s;
+                select.appendChild(opt);
             });
+        } catch (e) {
+            // ignore if endpoint doesn't exist; dropdown remains empty/inert
+        }
+    }
 
-        document.getElementById("refresh-button").onclick = refreshPacks;
+    function populatePlayers() {
+        const select = document.getElementById('playersSelect');
+        for (let i = 1; i <= 8; i++) {
+            const opt = document.createElement('option');
+            opt.value = i;
+            opt.textContent = i;
+            select.appendChild(opt);
+        }
+        select.value = '5'; // default
+    }
+
+    document.addEventListener('DOMContentLoaded', () => {
+        populatePlayers();
+        fetchSets();
+
+        // Go button: send chosen set + players to server and load packs
+        document.getElementById('goBtn').addEventListener('click', async () => {
+            const setVal = document.getElementById('setSelect').value || null;
+            const playersVal = document.getElementById('playersSelect').value || null;
+
+            try {
+                const res = await fetch('/refresh', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ set: setVal, players: playersVal })
+                });
+                const json = await res.json();
+                // use server-generated packs exactly as before
+                packs = json.packs || [];
+                deck = json.deck || [];
+                currentPackIndex = 0;
+
+                // hide start screen, show main UI
+                document.getElementById('start-screen').style.display = 'none';
+                document.getElementById('main-ui').style.display = '';
+
+                // render the first pack and deck
+                updatePack(packs[currentPackIndex] || []);
+                updateDeck(deck);
+            } catch (err) {
+                console.error('Error on Go:', err);
+            }
+        });
     });
 
     function bindCardClicks() {
@@ -187,24 +272,24 @@
     }
 
     function updatePack(pack) {
-        const container = document.getElementById("image-container");
-        container.innerHTML = "";
+        const container = document.getElementById('image-container');
+        container.innerHTML = '';
 
-        // Update the existing Pack info in the header
-        const packInfoEl = document.getElementById("pack-info");
+        // Update the Pack info in the header
+        const packInfoEl = document.getElementById('pack-info');
         packInfoEl.textContent = `Pack ${currentPackIndex + 1} / ${packs.length}`;
 
         // Render the cards
         pack.forEach(img => {
-            const card = document.createElement("div");
-            card.className = "image-card";
+            const card = document.createElement('div');
+            card.className = 'image-card';
 
-            const imageEl = document.createElement("img");
+            const imageEl = document.createElement('img');
             imageEl.src = img.url;
             imageEl.alt = img.name;
 
-            const nameEl = document.createElement("div");
-            nameEl.className = "name";
+            const nameEl = document.createElement('div');
+            nameEl.className = 'name';
             nameEl.textContent = img.name;
 
             card.appendChild(imageEl);
@@ -217,24 +302,24 @@
     }
 
     function updateDeck(deck) {
-        const deckContainer = document.getElementById("deck-container");
-        deckContainer.innerHTML = "";
+        const deckContainer = document.getElementById('deck-container');
+        deckContainer.innerHTML = '';
 
         if (deck.length === 0) {
-            deckContainer.innerHTML = "<em>No cards in deck yet</em>";
+            deckContainer.innerHTML = '<em>No cards in deck yet</em>';
             return;
         }
 
         deck.forEach(img => {
-            const card = document.createElement("div");
-            card.className = "deck-card";
+            const card = document.createElement('div');
+            card.className = 'deck-card';
 
-            const imageEl = document.createElement("img");
+            const imageEl = document.createElement('img');
             imageEl.src = img.url;
             imageEl.alt = img.name;
 
-            const nameEl = document.createElement("div");
-            nameEl.className = "name";
+            const nameEl = document.createElement('div');
+            nameEl.className = 'name';
             nameEl.textContent = img.name;
 
             card.appendChild(imageEl);
@@ -244,7 +329,7 @@
     }
 
     function refreshPack() {
-        fetch("/refresh", { method: "POST" })
+        fetch('/refresh', { method: 'POST' })
             .then(response => response.json())
             .then(data => {
                 packs = data.packs;      // updated packs from server
@@ -252,7 +337,7 @@
                 currentPackIndex = 0;    // reset to first pack
 
                 // Update header pack info
-                const packInfoEl = document.getElementById("pack-info");
+                const packInfoEl = document.getElementById('pack-info');
                 packInfoEl.textContent = `Pack ${currentPackIndex + 1} / ${packs.length}`;
 
                 // Display first pack
@@ -262,11 +347,10 @@
                 updateDeck(deck);
             })
             .catch(err => {
-                console.error("Failed to refresh packs:", err);
+                console.error('Failed to refresh packs:', err);
             });
     }
     </script>
-
 
 </body>
 </html>

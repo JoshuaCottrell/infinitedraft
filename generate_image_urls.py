@@ -22,7 +22,7 @@ def get_scryfall_image_url(card_name):
         return None
 
 
-def generate_card_links(input_file, output_file=os.path.join(os.path.dirname(__file__), 'images.csv')):
+def generate_card_links(input_file, output_file=os.path.join(os.path.dirname(__file__), 'cards.csv')):
     """Read card names from a file and write card name + PNG link to CSV."""
     with open(input_file, "r", encoding="utf-8") as f:
         card_names = [line.strip() for line in f if line.strip()]
