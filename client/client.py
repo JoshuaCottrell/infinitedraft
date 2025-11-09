@@ -8,14 +8,24 @@ import requests
 log = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
-app = Flask(__name__)
+# Set BASE_DIR to repo root (one directory above this client/ folder)
+BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+log.info("client BASE_DIR set to %s", BASE_DIR)
+
+# Configure Flask to use templates and static from repo root (templates/ and static/)
+app = Flask(
+    __name__,
+    template_folder=os.path.join(os.path.dirname(__file__), 'templates'),
+    static_folder=os.path.join(BASE_DIR, 'static')
+)
 
 PACK_SIZE = 14
 NUM_PACKS = 5
 ROUNDS = 3  # number of rounds
 
-# Presence server to notify for realtime updates (presence_app default)
+# Presence server notify URL (env override allowed)
 PRESENCE_NOTIFY_URL = os.environ.get('PRESENCE_NOTIFY_URL', 'http://localhost:5001/notify')
+log.info("PRESENCE_NOTIFY_URL set to %s", PRESENCE_NOTIFY_URL)
 
 # Global state
 all_cards = []      # All cards loaded from CSV (fallback)
@@ -25,8 +35,6 @@ packs_ready_rounds = []  # parallel boolean arrays for readiness per pack per ro
 current_round = 0
 deck = []           # Cards in deck (global)
 # NOTE: per-client pack_index flows use pack_index parameter in requests
-
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
 # -----------------------
@@ -163,12 +171,6 @@ def click():
     """
     Pick card from a specific pack in the current round (pack_index required for per-client mode),
     or use global behavior if pack_index is omitted.
-
-    New behavior:
-      - When a pick is made, mark that pack as ready for passing.
-      - If the next pack is ready, allow immediate advance (and mark next as not ready).
-      - If the next pack is not ready, respond advanced=False and waiting_on index.
-      - If after the pick all packs in the current round are empty, advance to next round immediately and notify presence.
     """
     global packs_rounds, packs_ready_rounds, current_round, deck
 
@@ -213,14 +215,12 @@ def click():
         if current_round + 1 < len(packs_rounds):
             current_round += 1
             round_advanced = True
-            # make sure readiness array exists for new round
             notify_presence({
                 'event': 'round_advanced',
                 'current_round': current_round,
                 'rounds': len(packs_rounds)
             })
         else:
-            # no more rounds; leave state as-is (draft ended)
             notify_presence({
                 'event': 'draft_complete'
             })
@@ -231,19 +231,14 @@ def click():
     # if the next pack is ready (in the round that client is acting on), allow immediate advance
     can_advance = False
     if not round_advanced:
-        # only check readiness in the current (pre-advance) round
         if round_ready[next_index]:
-            # claim it (mark not ready)
             round_ready[next_index] = False
             can_advance = True
     else:
-        # round advanced — client's next pack should be in the new current_round; use same topological index
-        # if new round exists, set next_index relative to new round; treat can_advance as True to let client load immediately
         if current_round < len(packs_rounds):
             can_advance = True
             next_index = target_pack_index % len(packs_rounds[current_round])
 
-    # notify presence of the change (send minimal useful info)
     notify_presence({
         'event': 'pick_made',
         'round': current_round,
@@ -291,13 +286,11 @@ def claim_pack():
 
     # mark as not ready (claimed)
     packs_ready_rounds[current_round][pack_index] = False
-    # notify presence that a claim happened
     notify_presence({
         'event': 'pack_claimed',
         'round': current_round,
         'pack_index': pack_index
     })
-    # return the pack contents
     return jsonify({'ok': True, 'pack_index': pack_index, 'pack': packs_rounds[current_round][pack_index],
                     'packs_ready': packs_ready_rounds[current_round]})
 
@@ -307,10 +300,6 @@ def refresh():
     """
     Accepts optional JSON body:
       { "set": "<set_name>", "players": <int>, "rounds": <int> }
-    Behavior:
-      - If a valid set is specified, choose players*rounds pack folders from sets/<set>/ and partition into rounds.
-      - If set is missing, fallback to shuffled generation from root cards.csv.
-      - Initialize packs_ready for each round to False.
     """
     global deck, current_round, packs_rounds, packs_ready_rounds, all_cards
 
@@ -338,7 +327,6 @@ def refresh():
     if set_name:
         available_pack_folders = list_pack_folders(set_name)
         if available_pack_folders:
-            # choose total = num_players * rounds folders randomly (allow cycling)
             chosen = []
             shuffled = available_pack_folders.copy()
             random.shuffle(shuffled)
@@ -347,7 +335,6 @@ def refresh():
             while len(chosen) < total_needed:
                 chosen.append(shuffled[i % len(shuffled)])
                 i += 1
-            # partition into rounds: round 0 -> first num_players, round1 -> next num_players, ...
             new_packs_rounds = []
             for r in range(rounds):
                 start = r * num_players
@@ -360,19 +347,15 @@ def refresh():
             packs_rounds = new_packs_rounds
             packs_ready_rounds = [[False] * num_players for _ in range(rounds)]
         else:
-            # fallback: generate from root CSV
             all_cards = load_cards_from_csv()
             generate_packs_fallback(num_players, rounds=rounds)
     else:
-        # no set specified: fallback generation
         all_cards = load_cards_from_csv()
         generate_packs_fallback(num_players, rounds=rounds)
 
-    # reset state
     deck = []
     current_round = 0
 
-    # notify presence of new packs
     notify_presence({
         'event': 'refresh',
         'rounds': len(packs_rounds),
@@ -380,7 +363,6 @@ def refresh():
         'packs_counts': [ [len(p) for p in r] for r in packs_rounds ]
     })
 
-    # return current round packs and readiness
     current_packs = packs_rounds[current_round] if packs_rounds else []
     current_ready = packs_ready_rounds[current_round] if packs_ready_rounds else []
     return jsonify({

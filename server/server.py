@@ -1,4 +1,4 @@
-from flask import Flask, render_template_string, request, jsonify
+from flask import Flask, render_template, request, jsonify
 from flask_socketio import SocketIO
 import requests
 import os
@@ -12,97 +12,22 @@ log = logging.getLogger("presence_app")
 ORIGINAL_APP = os.environ.get('ORIGINAL_APP', 'http://localhost:5000')
 PRESENCE_PORT = int(os.environ.get('PRESENCE_PORT', 5001))
 
-app = Flask(__name__)
+# Make this server use its own templates folder (server/templates)
+BASE_DIR = os.path.abspath(os.path.dirname(__file__))
+TEMPLATES_DIR = os.path.join(BASE_DIR, 'templates')
+log.info("server BASE_DIR=%s templates=%s", BASE_DIR, TEMPLATES_DIR)
+
+app = Flask(__name__, template_folder=TEMPLATES_DIR)
 socketio = SocketIO(app, cors_allowed_origins="*")
 
 # Ordered list of non-admin connected clients (sids) and mapping sid->name
 connected_sids = []
 sid_to_name = {}
 
-# Host welcome page HTML (served at /)
-START_HTML = """
-<!doctype html>
-<html>
-  <head>
-    <meta charset="utf-8"/>
-    <title>InfiniteDraft — Host</title>
-    <style>
-      body { font-family: Arial, sans-serif; padding: 24px; background: #222; color: #eee; }
-      .controls { display:flex; flex-direction:column; gap:12px; max-width:360px; }
-      label { font-weight:600; }
-      select, button { padding:8px 10px; font-size:14px; }
-      #status { margin-top:12px; color:#bdbdbd; }
-    </style>
-  </head>
-  <body>
-    <h1>InfiniteDraft — Host</h1>
-    <div class="controls">
-      <div>
-        <label for="setSelect">Set</label><br>
-        <select id="setSelect"></select>
-      </div>
-
-      <div>
-        <button id="goBtn">Go!</button>
-      </div>
-
-      <div id="status">Connected clients: <span id="count">0</span></div>
-    </div>
-
-    <script src="https://cdn.socket.io/4.5.3/socket.io.min.js"></script>
-    <script>
-      const socket = io(window.location.origin + '?source=admin', { transports: ['websocket', 'polling'] });
-      socket.on('connect', () => console.log('socket connected to presence server (admin)'));
-      socket.on('user_count', n => document.getElementById('count').textContent = n);
-      socket.on('go', data => { console.log('Go event received (host page)', data); });
-      socket.on('packs_update', data => { console.log('packs_update', data); });
-
-      async function fetchSets() {
-        try {
-          const res = await fetch('/sets');
-          const j = await res.json();
-          const sel = document.getElementById('setSelect');
-          sel.innerHTML = '';
-          (j.sets || []).forEach(s => {
-            const opt = document.createElement('option');
-            opt.value = s;
-            opt.textContent = s;
-            sel.appendChild(opt);
-          });
-        } catch (e) {
-          console.warn('Failed to load sets', e);
-        }
-      }
-
-      document.getElementById('goBtn').addEventListener('click', async () => {
-        const set = document.getElementById('setSelect').value || null;
-        document.getElementById('status').textContent = 'Sending start to server…';
-        try {
-          const res = await fetch('/go', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ set })
-          });
-          const json = await res.json();
-          if (!res.ok) {
-            document.getElementById('status').textContent = 'Failed: ' + (json.error || res.status);
-            return;
-          }
-          document.getElementById('status').textContent = 'Started — notified ' + (json.notified_clients || 0) + ' clients';
-        } catch (err) {
-          document.getElementById('status').textContent = 'Error: ' + err;
-        }
-      });
-
-      fetchSets();
-    </script>
-  </body>
-</html>
-"""
-
+# The host UI is now a regular template at server/templates/index.html
 @app.route('/')
 def index():
-    return render_template_string(START_HTML)
+    return render_template('index.html')
 
 
 @app.route('/sets')
@@ -160,7 +85,7 @@ def go():
 @app.route('/notify', methods=['POST'])
 def notify():
     """
-    Endpoint for app.py to POST updates. This simply forwards the JSON payload to all connected clients
+    Endpoint for client.py to POST updates. This simply forwards the JSON payload to all connected clients
     as a 'packs_update' socket event.
     """
     data = request.get_json() or {}
