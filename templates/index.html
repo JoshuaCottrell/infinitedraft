@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Random Image Packs with Deck</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background: #222;
+            color: white;
+            margin: 0;
+            padding: 0;
+            padding-bottom: 150px; /* space for fixed footer */
+        }
+
+        header {
+            background-color: #111;
+            padding: 15px 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 2px solid #444;
+        }
+
+        header button {
+            background: #ff6600;
+            color: white;
+            border: none;
+            padding: 10px 15px;
+            font-size: 16px;
+            cursor: pointer;
+            border-radius: 5px;
+        }
+
+        #pack-info {
+            font-size: 16px;
+        }
+
+        #image-container {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            gap: 15px;
+            justify-items: center;
+            padding: 20px;
+            z-index: 0; /* ensure it's above background elements */
+        }
+
+
+        .image-card {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            cursor: pointer;
+            width: 100%;
+            pointer-events: auto; /* ensure pointer events are enabled */
+        }
+
+
+        img {
+            width: 100%;
+            height: auto;
+            object-fit: contain;
+            background: #000;
+            border-radius: 8px;
+            border: 2px solid #444;
+            padding: 5px;
+            transition: transform 0.2s;
+        }
+
+        img:hover {
+            transform: scale(1.05);
+        }
+
+        .name {
+            margin-top: 8px;
+            font-size: 16px;
+            font-weight: bold;
+            color: #f0f0f0;
+            text-align: center;
+        }
+
+        footer {
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            background: #111;
+            border-top: 2px solid #444;
+            padding: 10px 20px;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            max-height: 140px;
+            overflow-x: auto;
+            overflow-y: hidden;
+        }
+
+        .deck-card {
+            width: 100px;
+            flex-shrink: 0;
+            text-align: center;
+        }
+
+        .deck-card img {
+            width: 100%;
+            border-radius: 6px;
+            border: 1px solid #555;
+        }
+
+        .deck-card .name {
+            font-size: 12px;
+            color: #f0f0f0;
+            margin-top: 3px;
+        }
+
+    </style>
+</head>
+<body>
+    <header>
+        <div id="pack-info">Pack {{ pack_number }} / {{ total_packs }}</div>
+        <button onclick="refreshPack()">🔄 Refresh</button>
+    </header>
+
+    <div id="image-container">
+        {% for img in images %}
+        <div class="image-card" onclick="imageClicked('{{ img.name }}')">
+            <img src="{{ img.url }}" alt="{{ img.name }}">
+            <div class="name">{{ img.name }}</div>
+        </div>
+        {% endfor %}
+    </div>
+
+    <footer id="deck-container">
+        {% for img in deck %}
+        <div class="deck-card">
+            <img src="{{ img.url }}" alt="{{ img.name }}">
+            <div class="name">{{ img.name }}</div>
+        </div>
+        {% endfor %}
+    </footer>
+    
+
+
+    
+    <script>
+    let currentPackIndex = 0; // 0-based index for packs
+    let packs = [];           // array of packs
+    let deck = [];            // array of selected cards
+
+    document.addEventListener("DOMContentLoaded", () => {
+        fetch("/get_packs")
+            .then(response => response.json())
+            .then(data => {
+                packs = data.packs; // array of arrays
+                updatePack(packs[currentPackIndex]);
+                updateDeck(deck);
+            });
+
+        document.getElementById("refresh-button").onclick = refreshPacks;
+    });
+
+    function bindCardClicks() {
+        const cards = document.querySelectorAll('#image-container .image-card');
+        cards.forEach(card => {
+            card.onclick = () => {
+                const name = card.querySelector('.name').textContent;
+                handleCardClick(name);
+            };
+        });
+    }
+
+    function handleCardClick(name) {
+        // Find the card object in the current pack
+        const cardIndex = packs[currentPackIndex].findIndex(c => c.name === name);
+        if (cardIndex === -1) return;
+
+        // Move card to deck
+        deck.push(packs[currentPackIndex][cardIndex]);
+        packs[currentPackIndex].splice(cardIndex, 1);
+
+        // Switch to next pack
+        currentPackIndex = (currentPackIndex + 1) % packs.length;
+
+        updatePack(packs[currentPackIndex]);
+        updateDeck(deck);
+    }
+
+    function updatePack(pack) {
+        const container = document.getElementById("image-container");
+        container.innerHTML = "";
+
+        // Update the existing Pack info in the header
+        const packInfoEl = document.getElementById("pack-info");
+        packInfoEl.textContent = `Pack ${currentPackIndex + 1} / ${packs.length}`;
+
+        // Render the cards
+        pack.forEach(img => {
+            const card = document.createElement("div");
+            card.className = "image-card";
+
+            const imageEl = document.createElement("img");
+            imageEl.src = img.url;
+            imageEl.alt = img.name;
+
+            const nameEl = document.createElement("div");
+            nameEl.className = "name";
+            nameEl.textContent = img.name;
+
+            card.appendChild(imageEl);
+            card.appendChild(nameEl);
+            container.appendChild(card);
+        });
+
+        // Rebind click events after DOM update
+        bindCardClicks();
+    }
+
+    function updateDeck(deck) {
+        const deckContainer = document.getElementById("deck-container");
+        deckContainer.innerHTML = "";
+
+        if (deck.length === 0) {
+            deckContainer.innerHTML = "<em>No cards in deck yet</em>";
+            return;
+        }
+
+        deck.forEach(img => {
+            const card = document.createElement("div");
+            card.className = "deck-card";
+
+            const imageEl = document.createElement("img");
+            imageEl.src = img.url;
+            imageEl.alt = img.name;
+
+            const nameEl = document.createElement("div");
+            nameEl.className = "name";
+            nameEl.textContent = img.name;
+
+            card.appendChild(imageEl);
+            card.appendChild(nameEl);
+            deckContainer.appendChild(card);
+        });
+    }
+
+    function refreshPack() {
+        fetch("/refresh", { method: "POST" })
+            .then(response => response.json())
+            .then(data => {
+                packs = data.packs;      // updated packs from server
+                deck = [];               // clear deck
+                currentPackIndex = 0;    // reset to first pack
+
+                // Update header pack info
+                const packInfoEl = document.getElementById("pack-info");
+                packInfoEl.textContent = `Pack ${currentPackIndex + 1} / ${packs.length}`;
+
+                // Display first pack
+                updatePack(packs[currentPackIndex]);
+
+                // Update deck footer (clears it)
+                updateDeck(deck);
+            })
+            .catch(err => {
+                console.error("Failed to refresh packs:", err);
+            });
+    }
+    </script>
+
+
+</body>
+</html>
